@@ -1,0 +1,909 @@
+---
+title: 'Final Project: Predicting Hall of Fame NBA Players after First 3 Seasons'
+author: "Anthony Park"
+date: "December 20, 2018"
+output: ioslides_presentation
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(kableExtra)
+library(caret)
+library(rpart)
+library(ranger)
+library(ggplot2)
+library(ggcorrplot)
+library(dplyr)
+library(plotly)
+library(animation)
+library(ggvis)
+library(ggalt)
+library(ggfortify)
+library(gganimate2)
+library(tweenr)
+library(ggrepel)
+
+nba <- read.csv("C:/Users/student/Documents/Data Analysis Practice Data Sets/Hall of Fame Data.csv",                 na.strings = c("", "TOT"))
+
+str(nba)
+
+nba$ï..Player <- NULL
+nba$X <- NULL
+```
+
+##Background
+- Source: Basketball Reference
+  - Had to build the data set
+- Target variable: Hall_of_Fame (Yes) or not(No)
+- Variables: 37 including total points, win shares, assists, rebounds, ROY (binary), All Star(binary), and more
+
+```{r}
+colnames(nba)
+```
+
+```{r Imputation, include=FALSE, fig.height=18, fig.width=25, echo=FALSE, message=FALSE, cache=TRUE}
+nba2 <- nba
+nba2$Tm <- NULL
+nba2$Lg <- NULL
+nba2$GS <- NULL
+
+#Using only clean observations
+library(Quick.Analysis)
+nba.remove <- quick_clean(nba2, "remove")
+paste('Sum of missing values after removing observations with missing values:',
+        sum(is.na(nba.remove)))
+
+#Using K-nearest neighbor imputation
+library(caret)
+knn <- preProcess(nba2, method = c("knnImpute"))
+nba.knn <- predict(knn, nba2)
+paste('Sum of missing values after KNN impute:', sum(is.na(nba.knn)))
+
+```
+
+
+```{r CustomImp, warning=FALSE, message = FALSE, cache=TRUE, include=FALSE}
+nba.custom <- nba2
+nba.custom <- nba.custom[nba.custom$From > 1950,]
+
+nba.custom$X3P_CAT <- cut(nba.custom$X3P,
+                          breaks = c(-Inf, 25, 75, 125, Inf),
+                          labels = c("< 25", "25 to 75", "76 to 125", ">125"))
+nba.custom$X3P_CAT <- as.numeric(nba.custom$X3P_CAT)
+nba.custom$X3P[is.na(nba.custom$X3P)] = "Pre 3pt era"
+nba.custom$X3P_CAT[is.na(nba.custom$X3P_CAT)] = nba.custom$X3P
+nba.custom$X3P_CAT <- as.factor(nba.custom$X3P_CAT)
+nba.custom$X3P <- NULL
+
+nba.custom$X3PA_CAT <- cut(nba.custom$X3PA,
+                          breaks = c(-Inf, 25, 100, 175, Inf),
+                          labels = c("< 25", "25 to 100", "101 to 175", ">175"))
+nba.custom$X3PA_CAT <- as.numeric(nba.custom$X3PA_CAT)
+nba.custom$X3PA_CAT[is.na(nba.custom$X3PA)] = "Pre 3pt era"
+nba.custom$X3PA_CAT[is.na(nba.custom$X3PA_CAT)] = nba.custom$X3PA
+nba.custom$X3PA_CAT <- as.factor(nba.custom$X3PA_CAT)
+nba.custom$X3PA <- NULL
+
+nba.custom$X3P_PERC_CAT <- cut(nba.custom$X3P_PERC,
+                          breaks = c(-Inf, .15, .25, .35, Inf),
+                          labels = c("< 15%", "15% to 25%", "25% to 35%", "> 35%"))
+nba.custom$X3P_PERC_CAT <- as.numeric(nba.custom$X3P_PERC_CAT)
+nba.custom$X3P_PERC_CAT[is.na(nba.custom$X3P_PERC)] = "Pre 3pt era"
+nba.custom$X3P_PERC_CAT[is.na(nba.custom$X3P_PERC_CAT)] = nba.custom$X3P
+nba.custom$X3P_PERC_CAT <- as.factor(nba.custom$X3P_PERC_CAT)
+nba.custom$X3P_PERC <- NULL
+
+nba.custom$TOV_CAT <- cut(nba.custom$TOV,
+                          breaks = c(-Inf, 50, 125, 200, Inf),
+                          labels = c("< 50", "50 to 125", "125 to 200", "> 200"))
+nba.custom$TOV_CAT <- as.numeric(nba.custom$TOV_CAT)
+nba.custom$TOV_CAT[is.na(nba.custom$TOV)] = "Pre stat era"
+nba.custom$TOV_CAT[is.na(nba.custom$TOV_CAT)] = nba.custom$X3P
+nba.custom$TOV_CAT <- as.factor(nba.custom$TOV_CAT)
+nba.custom$TOV <- NULL
+
+nba.custom$STL_CAT <- cut(nba.custom$STL,
+                          breaks = c(-Inf, 25, 75, 125, Inf),
+                          labels = c("< 25", "25 to 75", "76 to 125", ">125"))
+nba.custom$STL_CAT <- as.numeric(nba.custom$STL_CAT)
+nba.custom$STL_CAT[is.na(nba.custom$STL)] = "Pre stat era"
+nba.custom$STL_CAT[is.na(nba.custom$STL_CAT)] = nba.custom$X3P
+nba.custom$STL_CAT <- as.factor(nba.custom$STL_CAT)
+nba.custom$STL <- NULL
+
+nba.custom$BLK_CAT <- cut(nba.custom$BLK,
+                          breaks = c(-Inf, 50, 100, 150, Inf),
+                          labels = c("< 50", "50 to 100", "100 to 150", "> 150"))
+nba.custom$BLK_CAT <- as.numeric(nba.custom$BLK_CAT)
+nba.custom$BLK_CAT[is.na(nba.custom$BLK)] = "Pre stat era"
+nba.custom$BLK_CAT[is.na(nba.custom$BLK_CAT)] = nba.custom$X3P
+nba.custom$BLK_CAT <- as.factor(nba.custom$BLK_CAT)
+nba.custom$BLK <- NULL
+
+mpg <- nba.custom$MP / nba.custom$G
+nba.custom$mpg <- mean(mpg, na.rm = TRUE)
+nba.custom$MP[is.na(nba.custom$MP)] = nba.custom$G * nba.custom$mpg
+nba.custom$mpg <- NULL
+
+drp <- nba.custom$DRB / nba.custom$TRB
+nba.custom$drp <- mean(drp, na.rm = TRUE)
+nba.custom$DRB[is.na(nba.custom$DRB)] = nba.custom$TRB * nba.custom$drp
+nba.custom$ORB[is.na(nba.custom$ORB)] = nba.custom$TRB - nba.custom$DRB
+nba.custom$drp = NULL
+
+nba.custom$WS[is.na(nba.custom$WS)] = 0
+nba.custom$TS_PERC[is.na(nba.custom$TS_PERC)] = 0
+
+nba.custom$FG_PERC = nba.custom$FG / nba.custom$FGA
+nba.custom$FG_PERC[is.nan(nba.custom$FG_PERC)] = 0
+
+nba.custom$X2P_PERC = nba.custom$X2P / nba.custom$FGA
+nba.custom$X2P_PERC[is.nan(nba.custom$X2P_PERC)] = 0
+
+nba.custom$eFG_PERC[is.na(nba.custom$eFG_PERC)] = 0
+
+nba.custom$FG_PERC = nba.custom$FG / nba.custom$FGA
+nba.custom$FG_PERC[is.nan(nba.custom$FG_PERC)] = 0
+
+nba.custom$FT_PERC = nba.custom$FT / nba.custom$FTA
+nba.custom$FT_PERC[is.nan(nba.custom$FT_PERC)] = 0
+# 
+# paste('Sum of missing values after custom imputing:', 
+#         sum(is.na(nba.custom)))
+```
+
+##Visualization: Distribution of Target Variable
+```{r }
+ggplot(nba, aes(x=Hall_of_Fame, fill=Hall_of_Fame)) +
+  geom_bar() +
+  guides(fill=FALSE) +
+  ggtitle("Distribution of Hall of Fame") +
+  geom_text(stat='count', aes(label=..count..), vjust = 1) 
+```
+
+##Free Throws Attempted by Hall of Fame
+<iframe src="FTA.gif"></iframe>
+
+##Win Shares by Hall of Fame
+<iframe src="WinShares.gif"></iframe>
+
+##Three Pointers over Time
+<iframe src="ThreePointers2.gif"></iframe>
+
+##Visualization: Variable Importance
+```{r cache=TRUE}
+#Variable Importance
+set.seed(1234)
+varImportTree <- rpart(Hall_of_Fame ~ ., data = nba.custom, method = "class")
+varImportance <- varImp(varImportTree, scale = TRUE)
+var <- rownames(varImportance)
+VI <- cbind(id=var, varImportance)
+VI <- VI[VI$Overall > 0,]
+ggplot(VI) +
+  geom_bar(mapping = aes(x = reorder(id, -Overall), y = Overall, fill=id), stat = "identity") +
+  ggtitle("Variable Importance from Random Forest") +
+  guides(fill=FALSE) +
+  xlab("Variable") +
+  scale_x_discrete(labels = abbreviate) +
+  ylab("Importance") 
+```
+
+```{r Cluster, eval=FALSE, include=FALSE}
+ggplot(nba.remove, aes(FTA, STL, col=Hall_of_Fame)) + 
+  geom_point(aes(shape=Hall_of_Fame), size=2) + 
+  labs(title="Hall of Fame Clustering based on Points and Total Rebounds") + 
+  stat_ellipse()
+```
+
+```{r PCA_Graphs, include=FALSE, eval=FALSE}
+nums <- unlist(lapply(nba.remove, is.numeric)) 
+nums <- nba.remove[,nums]
+nba.HOF <- nba.remove[,37]
+autoplot(prcomp(nums), data = nba.remove, colour = "Hall_of_Fame", loadings = TRUE)
+```
+
+
+```{r Cat, warning=FALSE, eval=FALSE, include=FALSE}
+bar_charts2 = function(data, variable1, variable2)
+{
+  chart_list <- list()
+  s = 0
+  library(ggplot2)
+  if (is.factor(data[,variable1]) & is.factor(data[,variable2])){
+    s = s + 1
+    chart_list[s] <- ggplot(data, aes(x = data[,variable1], fill=data[,variable2])) + 
+      geom_bar() +
+      geom_text_repel(stat='count', aes(label=..count..), vjust=-1) +
+      xlab(variable1) +
+      labs(fill = variable2)
+  } else print("At least one of the input variables is not categorical.")
+}
+
+c1 <- bar_charts2(nba, "Hall_of_Fame", "All_Star") + ggtitle("Distribution of All Stars by Hall of Fame")
+c1
+c2 <- bar_charts2(nba, "Hall_of_Fame", "All_NBA")+ ggtitle("Distribution of Rookie of the Years by Hall of Fame")
+c2
+
+theme_set(theme_classic())
+ggplot(nba) +
+  geom_boxplot(mapping = aes(x=Hall_of_Fame, y=X3P)) 
+
+
+```
+
+```{r Animation, fig.show='animate', cache=TRUE, include=FALSE}
+library(gganimate2)
+g1 <- ggplot(nba.remove, aes(X3PA, X3P, frame = From)) +
+  geom_point() +
+  geom_smooth(aes(group = From),
+              method = "lm",
+              show.legend = FALSE) +
+  ggtitle("Three Pointers Attempted and Made over the Years in the NBA")
+
+a1 <- gganimate(g1, interval=.8, "ThreePointers2.gif", cumulative = FALSE, title_frame = FALSE)
+a1
+
+g2 <- ggplot(nba, aes(FTA,  frame = Hall_of_Fame, fill = Hall_of_Fame)) +
+  geom_density() +
+  ggtitle("Free Throws Attempted by Hall of Fame or Not")
+
+a2 <- gganimate(g2, interval=1.5, "Free Throws Attempted.gif", title_frame = FALSE,
+                cumulative = FALSE)
+a2
+
+g3 <- ggplot(nba.knn, aes(WS,  frame = Hall_of_Fame, fill = Hall_of_Fame)) +
+  geom_density() +
+  ggtitle("Win Shares by Hall of Fame or Not")
+
+a3 <- gganimate(g3, interval=1, "Win Shares.gif", title_frame = FALSE, 
+                cumulative = FALSE)
+a3
+
+```
+
+
+```{r Regressions, include=FALSE, eval=FALSE}
+ggplot(nba.custom, aes(x=FG, y=PTS)) +
+  geom_point(mapping = aes(color = Hall_of_Fame)) +
+  geom_smooth(method = "lm") +
+  ggtitle("Points over Games by Hall of Fame or Not")
+
+plot_ly(data = nba.custom, x = ~G, y = ~WS, color = ~Hall_of_Fame, type = "scatter")
+
+nba3 <- nba[nba$From < 2008,]
+ggplot(nba3, aes(x=From, y=X3PA)) +
+  geom_bar(stat = "identity") +
+  ggtitle("Three Point Attempts over Time")
+
+ggplot(nba.custom, aes(x=ROY, y=All_Star, color = Hall_of_Fame)) +
+  geom_jitter() +
+  ggtitle("Rooking of the Year and All Star by Hall of Fame")
+
+ggplot(nba.custom, aes(x=Hall_of_Fame, y=TRB, fill = Hall_of_Fame)) +
+  geom_boxplot() +
+  ggtitle("Boxplots of Total Rebounds by Hall of Fame")
+
+```
+
+
+##Correlation
+```{r Correlation, message=FALSE, warning=FALSE}
+nums <- unlist(lapply(nba, is.numeric)) 
+nums <- nba[,nums]
+
+corr <- round(cor(nums), 4)
+
+# Plot
+ggcorrplot(corr,  
+           type = "lower", 
+           lab = TRUE, 
+           lab_size = 3, 
+           method="circle", 
+           colors = c("tomato2", "white", "springgreen3"), 
+           title="Correlation of Numerical Variables", 
+           ggtheme=theme_bw)
+
+```
+
+
+```{r Densities, warning=FALSE, include=FALSE, eval=FALSE}
+ggplot(nba) +
+  geom_density(mapping = aes(x=WS, fill = Hall_of_Fame), alpha = 0.5) +
+  ggtitle ("Distribution of Win Shares by Hall of Fame or Not")
+
+ggplot(nba) +
+  geom_density(mapping = aes(x=FTA, fill = Hall_of_Fame), alpha = 0.5) +
+  ggtitle ("Distribution of Free Throws Attempted by Hall of Fame or Not")
+
+ggplot(nba) +
+  geom_density(mapping = aes(x=AST, fill = Hall_of_Fame), alpha = 0.5) +
+  ggtitle ("Distribution of Assists by Hall of Fame or Not") 
+
+ggplot(nba) +
+  geom_density(mapping = aes(x=PTS, fill = Hall_of_Fame), alpha = 0.5) +
+  ggtitle ("Distribution of Points Attempted by Hall of Fame or Not") 
+
+nba3 <- nba
+nba3$Era <- ifelse(nba3$From < 1980, "Pre 3Pt Era", "Post 3Pt Era")
+ggplot(nba3, aes(x="", fill=Era)) +
+    geom_bar(width = 1) +
+  theme(axis.line = element_blank(), 
+        plot.title = element_text(hjust=0.5)) + 
+  labs(fill="class", 
+       x=NULL, 
+       y=NULL, 
+       title="Pie Chart of Pre and Post 3Pt Era Players in Data Set") +
+  coord_polar(theta = "y", start=0)
+```
+
+
+```{r Interactive, include=FALSE, cache=TRUE, warning=FALSE}
+nba.remove %>% 
+  ggvis(x = input_select(c('WS', 'G','FG','X3P','TRB','PTS'), map = as.name)) %>% 
+  layer_points(y=~WS, fill = ~Hall_of_Fame)
+```
+
+##Missing Values
+```{r MissingData, echo=FALSE, results='asis', message=FALSE}
+miss = function(data)
+{
+  missing_data <- data.frame("variable" = colnames(data),
+                            "missing_values" = colSums(is.na(data)))
+  m <- filter(missing_data, missing_values != 0)
+  m1 <- m[1:6,]
+  m2 <- m[7:12,]
+  m3 <- m[13:18,]
+  m4 <- cbind(m1,m2,m3)
+  kable(m4, align = rep(c("r", "l"), 2), col.names = rep(c("Variable", "Missing"), 3)) %>%
+    kable_styling(bootstrap_options = c("hover", "condensed")) %>%
+    column_spec(1, bold = TRUE) %>%
+    column_spec(3, bold = TRUE) %>%
+    column_spec(5, bold = TRUE)
+}
+
+miss(nba)
+```
+
+
+
+##Imputation Notes & Methods
+- 3 point line did not exist until 1979
+- Offensive and defensive rebounds, steals, and blocks didn't start being tracked until 1973
+- Team, League, and Games Started variables are deleted
+- **Methods**
+  - *Remove*
+    - When taking only clean observations, the data set is reduced to `r nrow(nba.remove)` observations
+  - *KNN*
+    - Keeps all `r nrow(nba.knn)` observations
+  - *Custum Method*
+    - Back into numbers so syntax is met
+      - Ex. Offensive plus defensive rebounds must equal total rebounds
+
+##Data Partition & Balancing Data
+- 70% training data and 30% testing data
+  - Testing data is held consisten to ensure unbias evaluation
+- Only 5% of players go to the hall of fame so the data must be balanced before modeling
+- Oversampling is used in order to maintain a reasonable sample size
+```{r cache=TRUE, include=TRUE, fig.align='center', fig.height=18, fig.width=25, echo=TRUE}
+oversample <- function(df)
+{
+  set.seed(100)
+  split <- createDataPartition(df$Hall_of_Fame, p = .7, list=FALSE, times=1)
+  training <- df[split,]
+  testing <- df[-split,]
+  
+  trainY <- training[training$Hall_of_Fame == "Yes",]
+  trainN <- training[training$Hall_of_Fame == "No",]
+  
+  nY <- nrow(trainY)
+  nN <- nrow(trainN)
+  
+  trainYY <- sample_n(trainY, nN, replace = TRUE)
+  train_over <- rbind(trainYY, trainN)
+  
+  return(list(train_over, testing))
+}
+```
+
+##Models
+- Random Forest
+- GLMnet
+- Support Vector Machine
+- Neural Network
+
+
+```{r Partition, echo=FALSE, include= FALSE, message=FALSE, warning=FALSE, }
+train.remove <- oversample(nba.remove)[[1]]
+test.remove <- oversample(nba.remove)[[2]]
+train.knn <- oversample(nba.knn)[[1]]
+test.knn <- oversample(nba.knn)[[2]]
+train.custom <- oversample(nba.custom)[[1]]
+test.custom <- oversample(nba.custom)[[2]]
+```
+
+
+```{r RF, echo=TRUE, fig.height=20, fig.width=25, fig.align='center', message=FALSE, warning=FALSE, cache=TRUE}
+rf <- function(df, test)
+{
+  set.seed(123)
+  random_forest <- ranger(Hall_of_Fame ~ ., data = df)
+  rf_predict <- predict(random_forest, data = test)$predictions
+  cm <- confusionMatrix(rf_predict, reference = test[,"Hall_of_Fame"], positive = "Yes")
+  return(cm)
+}
+
+rf.remove <- rf(train.remove, test.remove)
+rf.knn <- rf(train.knn, test.knn)
+rf.custom <- rf(train.custom, test.custom)
+```
+
+
+```{r GLM, echo=FALSE, message=FALSE, warning=FALSE, cache=TRUE}
+GLM_net <- function(df, test)
+{
+  myGrid <- expand.grid(alpha = 0.5,
+                    lambda = 1)
+  
+  m <- train(Hall_of_Fame~., df,
+             method = "glmnet",
+             tuneGrid = myGrid)
+  
+  p <- predict(m, test)
+  cm <- confusionMatrix(p, reference = test[,"Hall_of_Fame"], positive = "Yes")
+  return(cm)
+}
+
+glm.remove<-GLM_net(train.remove, test.remove)
+glm.knn<-GLM_net(train.knn, test.knn)
+glm.custom<-GLM_net(train.custom, test.custom)
+```
+
+```{r SVM, echo=FALSE, message=FALSE, warning=FALSE, cache=TRUE}
+SVM <- function(df, test)
+{
+  myGrid <- expand.grid(degree = 2,
+                  C = .1,
+                  scale = FALSE)
+  
+  m <- train(Hall_of_Fame~., df,
+             method = "svmPoly",
+             tuneGrid = myGrid)
+  
+  p <- predict(m, test)
+  cm <- confusionMatrix(p, reference = test[,"Hall_of_Fame"], positive = "Yes")
+  return(cm)
+}
+
+SVM.remove <- SVM(train.remove, test.remove)
+SVM.knn <- SVM(train.knn, test.knn)
+SVM.custom <- SVM(train.custom, test.custom)
+```
+
+
+```{r Neural, message=FALSE, warning=FALSE, cache=TRUE}
+NN <- function(df, test)
+{
+  myGrid <- expand.grid(size = 4,
+                  decay = 10)
+  
+  m <- train(Hall_of_Fame~., df,
+             method = "nnet",
+             tuneGrid = myGrid)
+  
+  p <- predict(m, test)
+  cm <- confusionMatrix(p, reference = test[,"Hall_of_Fame"], positive = "Yes")
+  return(cm)
+}
+
+NN.remove <- NN(train.remove, test.remove)
+NN.knn <- NN(train.knn, test.knn)
+NN.custom <- NN(train.custom, test.custom)
+```
+
+##Compare
+```{r Compare, message=FALSE, warning=FALSE}
+compare <- data.frame("Model" = c("Removed:Random Forest","Removed:SVM","Removed:GLMnet",
+                                  "Removed:Neural Network", "KNN:Random Forest", 
+                                  "KNN:SVM", "KNN:GLMnet", "KNN:Neural Network", 
+                                  "Custom:Random Forest", "Custom:SVM", "Custom:GLMnet",
+                                  "Custom:Neural Network"),
+                      "Accuracy" = c(rf.remove$overall[[1]], SVM.remove$overall[[1]],
+                      glm.remove$overall[[1]], NN.remove$overall[[1]], rf.knn$overall[[1]],
+                      SVM.knn$overall[[1]], glm.knn$overall[[1]], NN.knn$overall[[1]],
+                      rf.custom$overall[[1]],SVM.custom$overall[[1]], glm.custom$overall[[1]],
+                      NN.custom$overall[[1]]),
+                      
+                      "Sensitivity" = c(rf.remove$byClass[[1]], SVM.remove$byClass[[1]],
+                      glm.remove$byClass[[1]], NN.remove$byClass[[1]], rf.knn$byClass[[1]],
+                      SVM.knn$byClass[[1]], glm.knn$byClass[[1]], NN.knn$byClass[[1]],
+                      rf.custom$byClass[[1]],SVM.custom$byClass[[1]], glm.custom$byClass[[1]],
+                      NN.custom$byClass[[1]]),
+                      
+                      "Specificity" = c(rf.remove$byClass[[2]], SVM.remove$byClass[[2]],
+                      glm.remove$byClass[[2]], NN.remove$byClass[[2]], rf.knn$byClass[[2]],
+                      SVM.knn$byClass[[2]], glm.knn$byClass[[2]], NN.knn$byClass[[2]],
+                      rf.custom$byClass[[2]],SVM.custom$byClass[[2]], glm.custom$byClass[[2]],
+                      NN.custom$byClass[[2]]),
+                      
+                      "Balanced_Accuracy" = c(rf.remove$byClass[[11]], SVM.remove$byClass[[11]],
+                      glm.remove$byClass[[11]], NN.remove$byClass[[11]], rf.knn$byClass[[11]],
+                      SVM.knn$byClass[[11]], glm.knn$byClass[[11]], NN.knn$byClass[[11]],
+                      rf.custom$byClass[[11]],SVM.custom$byClass[[11]], glm.custom$byClass[[11]],
+                      NN.custom$byClass[[11]]))
+
+# kable(compare[order(-compare$Sensitivity),])
+
+ggplot(compare, aes(x=reorder(Model,Sensitivity), y=Sensitivity, fill = Model, 
+                    label = round(Sensitivity, 4))) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  guides(fill=FALSE) +
+  geom_text() +
+  labs(title = "Sensitivity of Base Models",
+       x = "Model")
+```
+
+##Compare (cont.)
+```{r message=FALSE, warning=FALSE}
+ggplot(compare, aes(x=reorder(Model,Balanced_Accuracy), y=Balanced_Accuracy, fill = Model, 
+                    label = round(Balanced_Accuracy, 4)))+
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  guides(fill=FALSE) +
+  geom_text() +
+  labs(title = "Balanced Accuracy of Base Models",
+       x = "Model")
+```
+
+## Encoding/Recoding Variables
+- Repetitive/correlated variables are deleted (FG, PERC, MVP, DPOY, etc.)
+- **Methods**
+  - *Binned*
+    - Grouped all continuous variables into 5 categories (same number of dimensions)
+  - *PCA*
+    - Reduces number of variables to 13
+  - *Custom Method*
+    - Also reduces the number of variables to 13
+    - Standardize values by making statistics per game
+
+
+```{r Simplify, include=FALSE, message=FALSE, warning=FALSE, cache=TRUE}
+simplify <- function(df)
+{
+  df2 <- df[,-c(2,6:7,14:15,23:28,30,31)]
+  return(df2)
+}
+
+simplify.rm <- simplify(train.remove)
+simp.test.rm <- simplify(test.remove)
+simplify.knn <- simplify(train.knn)
+simp.test.knn <- simplify(test.knn)
+
+simplify2 <- function(df)
+{
+  df2 <- df[,-c(2,6:7,12:13,18:22,24,25,33,34)]
+  return(df2)
+}
+
+simplify.cust <- simplify2(train.custom)
+simp.test.cust <- simplify2(test.custom)
+```
+
+```{r Bin, message=FALSE, warning=FALSE, include=FALSE, cache=TRUE}
+bin <- function(df)
+{
+  for (i in 1:ncol(df)){
+    if (is.numeric(df[,i])){
+      df[,i] = cut(df[,i], 5, 
+                   include.lowest = TRUE, 
+                   labels = c("Lowest", "Low", "Medium", "High", "Highest"))
+    }
+  }
+  return(df)
+}
+
+bin.rm <- bin(simplify.rm)
+bin.test.rm <- bin(simp.test.rm)
+bin.knn <- bin(simplify.knn)
+bin.test.knn <- bin(simp.test.knn)
+bin.cust <- bin(simplify.cust)
+bin.test.cust <- bin(simp.test.cust)
+```
+
+```{r PCA, message=FALSE, warning=FALSE, cache=TRUE, include=FALSE}
+PCA <- function(df)
+{
+  p <- preProcess(df, method = "pca")
+  p2 <- predict(p, df)
+  return(p2)
+}
+
+PCA.rm <- PCA(simplify.rm)
+PCA.test.rm <- PCA(simp.test.rm)
+PCA.knn <- PCA(simplify.knn)
+PCA.test.knn <- PCA(simp.test.knn)
+PCA.cust <- PCA(simplify.cust)
+PCA.test.cust <- PCA(simp.test.cust)
+```
+
+```{r Manipulate, message=FALSE, warning=FALSE, cache=TRUE, include=FALSE}
+manipulate <- function(df)
+{  
+  df$AllROY <- paste(df$All_Rookie, df$ROY)
+  
+  df2 <- df
+  for (i in 2:ncol(df)){
+    if (is.numeric(df[,i]))
+      df2[,i] <- df[,i] / df[,3]
+  }
+  
+  df2$Opportunities = df2$X2PA * 2 + df2$X3PA + df2$FTA * 3
+  df2$Hustle = df2$TRB * 2.5 + df2$STL + df2$AST*3 + df2$BLK
+  df2$Negatives = df2$TOV + df2$PF
+  
+  df2[,c("G","X2P","X3P", "FT","X2PA","X3PA","FTA","TRB","STL", "All_Rookie", "ROY", "AST",
+         "BLK", "TOV", "PF")] = NULL
+  
+  return(df2)
+}
+
+manip.rm <- manipulate(simplify.rm)
+manip.test.rm <- manipulate(simp.test.rm)
+manip.knn <- manipulate(simplify.knn)
+manip.test.knn <- manipulate(simp.test.knn)
+
+manipulate2 <- function(df)
+{  
+  df$AllROY <- paste(df$All_Rookie, df$ROY)
+  
+  df2 <- df
+  for (i in 2:ncol(df)){
+    if (is.numeric(df[,i]))
+      df2[,i] <- df[,i] / df[,3]
+  }
+  
+  df2$Opportunities = df2$X2PA * 2 + df2$FTA * 3
+  df2$Hustle = df2$TRB * 3 + df2$AST*2
+  df2$Negatives = df2$PF
+  
+  df2[,c("G","X2P","X3P_CAT", "FT","X2PA","FTA","TRB","All_Rookie","ROY", 
+         "AST", "PF")] = NULL
+  
+  return(df2)
+}
+
+manip.cust <- manipulate2(simplify.cust)
+manip.test.cust <- manipulate2(simp.test.cust)
+```
+
+
+```{r Run_All, include=FALSE, message=FALSE, warning=FALSE, cache=TRUE}
+rf.bin.rm<-rf(bin.rm, bin.test.rm)
+rf.bin.knn<-rf(bin.knn, bin.test.knn)
+rf.bin.custom<-rf(bin.cust, bin.test.cust)
+
+rf.PCA.rm<-rf(PCA.rm, PCA.test.rm)
+rf.PCA.knn<-rf(PCA.knn, PCA.test.knn)
+rf.PCA.custom<-rf(PCA.cust, PCA.test.cust)
+
+rf.manip.rm<-rf(manip.rm, manip.test.rm)
+rf.manip.knn<-rf(manip.knn, manip.test.knn)
+rf.manip.custom<-rf(manip.cust, manip.test.cust)
+
+NN.bin.rm<-NN(bin.rm, bin.test.rm)
+NN.bin.knn<-NN(bin.knn, bin.test.knn)
+NN.bin.custom<-NN(bin.cust, bin.test.cust)
+
+NN.PCA.rm<-NN(PCA.rm, PCA.test.rm)
+NN.PCA.knn<-NN(PCA.knn, PCA.test.knn)
+NN.PCA.custom<-NN(PCA.cust, PCA.test.cust)
+
+NN.manip.rm<-NN(manip.rm, manip.test.rm)
+NN.manip.knn<-NN(manip.knn, manip.test.knn)
+NN.manip.custom<-NN(manip.cust, manip.test.cust)
+
+glm.bin.rm<-GLM_net(bin.rm, bin.test.rm)
+glm.bin.knn<-GLM_net(bin.knn, bin.test.knn)
+glm.bin.custom<-GLM_net(bin.cust, bin.test.cust)
+
+glm.PCA.rm<-GLM_net(PCA.rm, PCA.test.rm)
+glm.PCA.knn<-GLM_net(PCA.knn, PCA.test.knn)
+glm.PCA.custom<-GLM_net(PCA.cust, PCA.test.cust)
+
+glm.manip.rm<-GLM_net(manip.rm, manip.test.rm)
+glm.manip.knn<-GLM_net(manip.knn, manip.test.knn)
+glm.manip.custom<-GLM_net(manip.cust, manip.test.cust)
+
+SVM.bin.rm<-SVM(bin.rm, bin.test.rm)
+SVM.bin.knn<-SVM(bin.knn, bin.test.knn)
+SVM.bin.custom<-SVM(bin.cust, bin.test.cust)
+
+SVM.PCA.rm<-SVM(PCA.rm, PCA.test.rm)
+SVM.PCA.knn<-SVM(PCA.knn, PCA.test.knn)
+SVM.PCA.custom<-SVM(PCA.cust, PCA.test.cust)
+
+SVM.manip.rm<-SVM(manip.rm, manip.test.rm)
+SVM.manip.knn<-SVM(manip.knn, manip.test.knn)
+SVM.manip.custom<-SVM(manip.cust, manip.test.cust)
+```
+
+
+```{r Compare_All, message=FALSE, warning=FALSE, cache=TRUE, include=FALSE}
+compare.bin <- data.frame("Model" = c("Removed Bin:Random Forest",
+                                  "Removed Bin:SVM","RemovedBin:GLMnet",
+                                  "Removed Bin:Neural Network", "KNN Bin:Random Forest", 
+                                  "KNN Bin:SVM", "KNN Bin:GLMnet", "KNN Bin:Neural Network", 
+                                  "Custom Bin:Random Forest", 
+                                  "Custom Bin:SVM", "Custom Bin:GLMnet",
+                                  "Custom Bin:Neural Network"),
+                      "Accuracy" = c(rf.bin.rm$overall[[1]], SVM.bin.rm$overall[[1]],
+                      glm.bin.rm$overall[[1]], NN.bin.rm$overall[[1]], rf.bin.knn$overall[[1]],
+                      SVM.bin.knn$overall[[1]], glm.bin.knn$overall[[1]], NN.bin.knn$overall[[1]],
+                      rf.bin.custom$overall[[1]],SVM.bin.custom$overall[[1]],
+                      glm.bin.custom$overall[[1]],NN.bin.custom$overall[[1]]),
+                      
+                      "Sensitivity" = c(rf.bin.rm$byClass[[1]], SVM.bin.rm$byClass[[1]],
+                      glm.bin.rm$byClass[[1]], NN.bin.rm$byClass[[1]], rf.bin.knn$byClass[[1]],
+                      SVM.bin.knn$byClass[[1]], glm.bin.knn$byClass[[1]], NN.bin.knn$byClass[[1]],
+                      rf.bin.custom$byClass[[1]],SVM.bin.custom$byClass[[1]],
+                      glm.bin.custom$byClass[[1]],NN.bin.custom$byClass[[1]]),
+                      
+                      "Specificity" = c(rf.bin.rm$byClass[[2]], SVM.bin.rm$byClass[[2]],
+                      glm.bin.rm$byClass[[2]], NN.bin.rm$byClass[[2]], rf.bin.knn$byClass[[2]],
+                      SVM.bin.knn$byClass[[2]], glm.bin.knn$byClass[[2]], NN.bin.knn$byClass[[2]],
+                      rf.bin.custom$byClass[[2]],SVM.bin.custom$byClass[[2]],
+                      glm.bin.custom$byClass[[2]],NN.bin.custom$byClass[[2]]),
+                      
+                      "Balanced_Accuracy" = c(rf.bin.rm$byClass[[11]], SVM.bin.rm$byClass[[11]],
+                      glm.bin.rm$byClass[[11]], NN.bin.rm$byClass[[11]], rf.bin.knn$byClass[[11]],
+                      SVM.bin.knn$byClass[[11]],glm.bin.knn$byClass[[11]],NN.bin.knn$byClass[[11]],
+                      rf.bin.custom$byClass[[11]],SVM.bin.custom$byClass[[11]],
+                      glm.bin.custom$byClass[[11]],NN.bin.custom$byClass[[11]]))
+
+compare.PCA <- data.frame("Model" = c("Removed PCA:Random Forest",
+                                  "Removed PCA:SVM","RemovedPCA:GLMnet",
+                                  "Removed PCA:Neural Network", "KNN PCA:Random Forest", 
+                                  "KNN PCA:SVM", "KNN PCA:GLMnet", "KNN PCA:Neural Network", 
+                                  "Custom PCA:Random Forest", 
+                                  "Custom PCA:SVM", "Custom PCA:GLMnet",
+                                  "Custom PCA:Neural Network"),
+                      "Accuracy" = c(rf.PCA.rm$overall[[1]], SVM.PCA.rm$overall[[1]],
+                      glm.PCA.rm$overall[[1]], NN.PCA.rm$overall[[1]], rf.PCA.knn$overall[[1]],
+                      SVM.PCA.knn$overall[[1]], glm.PCA.knn$overall[[1]], NN.PCA.knn$overall[[1]],
+                      rf.PCA.custom$overall[[1]],SVM.PCA.custom$overall[[1]],
+                      glm.PCA.custom$overall[[1]],NN.PCA.custom$overall[[1]]),
+                      
+                      "Sensitivity" = c(rf.PCA.rm$byClass[[1]], SVM.PCA.rm$byClass[[1]],
+                      glm.PCA.rm$byClass[[1]], NN.PCA.rm$byClass[[1]], rf.PCA.knn$byClass[[1]],
+                      SVM.PCA.knn$byClass[[1]], glm.PCA.knn$byClass[[1]], NN.PCA.knn$byClass[[1]],
+                      rf.PCA.custom$byClass[[1]],SVM.PCA.custom$byClass[[1]],
+                      glm.PCA.custom$byClass[[1]],NN.PCA.custom$byClass[[1]]),
+                      
+                      "Specificity" = c(rf.PCA.rm$byClass[[2]], SVM.PCA.rm$byClass[[2]],
+                      glm.PCA.rm$byClass[[2]], NN.PCA.rm$byClass[[2]], rf.PCA.knn$byClass[[2]],
+                      SVM.PCA.knn$byClass[[2]], glm.PCA.knn$byClass[[2]], NN.PCA.knn$byClass[[2]],
+                      rf.PCA.custom$byClass[[2]],SVM.PCA.custom$byClass[[2]],
+                      glm.PCA.custom$byClass[[2]],NN.PCA.custom$byClass[[2]]),
+                      
+                      "Balanced_Accuracy" = c(rf.PCA.rm$byClass[[11]], SVM.PCA.rm$byClass[[11]],
+                      glm.PCA.rm$byClass[[11]], NN.PCA.rm$byClass[[11]], rf.PCA.knn$byClass[[11]],
+                      SVM.PCA.knn$byClass[[11]],glm.PCA.knn$byClass[[11]],NN.PCA.knn$byClass[[11]],
+                      rf.PCA.custom$byClass[[11]],SVM.PCA.custom$byClass[[11]],
+                      glm.PCA.custom$byClass[[11]],NN.PCA.custom$byClass[[11]]))
+
+compare.manip <- data.frame("Model" = c("Removed manip:Random Forest",
+                                  "Removed manip:SVM","Removedmanip:GLMnet",
+                                  "Removed manip:Neural Network", "KNN manip:Random Forest", 
+                                  "KNN manip:SVM", "KNN manip:GLMnet", "KNN manip:Neural Network", 
+                                  "Custom manip:Random Forest", 
+                                  "Custom manip:SVM", "Custom manip:GLMnet",
+                                  "Custom manip:Neural Network"),
+                      "Accuracy" = c(rf.manip.rm$overall[[1]], SVM.manip.rm$overall[[1]],
+                      glm.manip.rm$overall[[1]], NN.manip.rm$overall[[1]],
+                      rf.manip.knn$overall[[1]],SVM.manip.knn$overall[[1]], 
+                      glm.manip.knn$overall[[1]], NN.manip.knn$overall[[1]],
+                      rf.manip.custom$overall[[1]],SVM.manip.custom$overall[[1]],
+                      glm.manip.custom$overall[[1]],NN.manip.custom$overall[[1]]),
+                      
+                      "Sensitivity" = c(rf.manip.rm$byClass[[1]], SVM.manip.rm$byClass[[1]],
+                      glm.manip.rm$byClass[[1]], NN.manip.rm$byClass[[1]],
+                      rf.manip.knn$byClass[[1]],SVM.manip.knn$byClass[[1]], 
+                      glm.manip.knn$byClass[[1]], NN.manip.knn$byClass[[1]],
+                      rf.manip.custom$byClass[[1]],SVM.manip.custom$byClass[[1]],
+                      glm.manip.custom$byClass[[1]],NN.manip.custom$byClass[[1]]),
+                      
+                      "Specificity" = c(rf.manip.rm$byClass[[2]], SVM.manip.rm$byClass[[2]],
+                      glm.manip.rm$byClass[[2]], NN.manip.rm$byClass[[2]],
+                      rf.manip.knn$byClass[[2]],SVM.manip.knn$byClass[[2]],
+                      glm.manip.knn$byClass[[2]], NN.manip.knn$byClass[[2]],
+                      rf.manip.custom$byClass[[2]],SVM.manip.custom$byClass[[2]],
+                      glm.manip.custom$byClass[[2]],NN.manip.custom$byClass[[2]]),
+                      
+                      "Balanced_Accuracy" = c(rf.manip.rm$byClass[[11]],SVM.manip.rm$byClass[[11]],
+                      glm.manip.rm$byClass[[11]], NN.manip.rm$byClass[[11]],
+                      rf.manip.knn$byClass[[11]],SVM.manip.knn$byClass[[11]],
+                      glm.manip.knn$byClass[[11]],NN.manip.knn$byClass[[11]],
+                      rf.manip.custom$byClass[[11]],SVM.manip.custom$byClass[[11]],
+                      glm.manip.custom$byClass[[11]],NN.manip.custom$byClass[[11]]))
+
+compare_all <- rbind(compare.bin, compare.PCA, compare.manip)
+```
+
+##Models after Variable Manipulation
+```{r Compare_cont2, message=FALSE, warning=FALSE, cache=TRUE}
+ggplot(compare_all, aes(x=reorder(Model,Sensitivity), y=Sensitivity, fill = Model, 
+                    label = round(Sensitivity, 4))) +
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  guides(fill=FALSE) +
+  geom_text(size = 3.5) +
+  labs(title = "Sensitivity of Feature Engineered Models",
+       x = "Model")
+```
+
+##Models after Variable Manipulation (cont.)
+```{r Compare_cont1, message=FALSE, warning=FALSE, cache=TRUE}
+ggplot(compare_all, aes(x=reorder(Model,Balanced_Accuracy), y=Balanced_Accuracy, fill = Model, 
+                    label = round(Balanced_Accuracy, 2)))+
+  geom_bar(stat = "identity") +
+  coord_flip() +
+  guides(fill=FALSE) +
+  geom_text(size = 3.5) +
+  labs(title = "Balanced Accuracy of Feature Engineered Models",
+       x = "Model")
+```
+
+```{r Final, eval=FALSE, cache=TRUE}
+NN_tune <- function(df, test)
+{
+  myControl <- trainControl(method = "cv", 
+                            number = 10)
+  
+  myGrid <- expand.grid(size = 2:5,
+                  decay = c(0.1,5,10))
+  
+  m <- train(Hall_of_Fame~., df,
+             method = "nnet",
+             tuneGrid = myGrid,
+             trControl = myControl)
+  
+  p <- predict(m, test)
+  cm <- confusionMatrix(p, reference = test[,"Hall_of_Fame"], positive = "Yes")
+  return(cm)
+}
+
+NNtune.rm <- NN_tune(train.remove, test.remove)
+NNtune.knn <- NN_tune(train.knn, test.knn)
+NNtune.PCA.custom <- NN_tune(PCA.cust, PCA.test.cust)
+NNtune.manip.rm <- NN_tune(manip.rm, manip.test.rm)
+
+rf_tune <- function(df, test)
+{
+ myGrid <- expand.grid(mtry = 3:6,
+                  splitrule = "gini",
+                  min.node.size = 1:5)
+  
+  m <- train(Hall_of_Fame~., df,
+             method = "ranger",
+             tuneGrid = myGrid)
+  
+  p <- predict(m, test)
+  cm <- confusionMatrix(p, reference = test[,"Hall_of_Fame"], positive = "Yes")
+  return(cm)
+}
+
+rf_tune()
+```
+
+##Conclusion
+- **Best models**
+  - Algorithm: *Neural Network*
+  - Imputation Method: *Depends on goal*
+  - Balanced Accuracy: *Neural network with only clean obs. (90.3%)*
+  - Sensitivity: *NN w/ PCA and custom imputation (94.4%)*
+- **Future research**
+  - More variables (height, college, position)
+  - Better feature engineering methods
+  
+##Thank you, any questions?
+
